@@ -2,3 +2,4 @@
 **/.DS_Store
 data/Sample - Superstore.csv
 data/superstore_clean.csv
+.env
