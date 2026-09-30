@@ -1,12 +1,17 @@
-import mysql.connector
 import pandas as pd
+import mysql.connector
+from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
 
-# loading my database credentials from .env file
+# loading my .env file
 load_dotenv()
 
-# connecting to my productiq database using credentials from .env
+# creating SQLAlchemy engine to avoid pandas warning
+db_url = f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
+engine = create_engine(db_url)
+
+# also keeping mysql connector for update operations
 try:
     conn = mysql.connector.connect(
         host=os.getenv("DB_HOST"),
@@ -20,11 +25,10 @@ except mysql.connector.Error as e:
     exit()
 
 # pulling the KPIs I calculated in day 3
-df = pd.read_sql("SELECT * FROM product_kpis", conn)
+df = pd.read_sql("SELECT * FROM product_kpis", engine)
 print(f"✅ Loaded KPIs for {len(df)} products")
 
 # using median as the cutoff point for high vs low
-# anything above median = high, below = low
 revenue_median = df['total_revenue'].median()
 growth_median = df['mom_growth_pct'].median()
 
@@ -35,8 +39,8 @@ print(f"📊 Growth Median: {growth_median:.2f}%")
 # and decides which BCG category it belongs to
 def assign_bcg(row):
     high_revenue = row['total_revenue'] >= revenue_median
-    high_growth = row['mom_growth_pct'] > 0   # actually growing
-    declining = row['mom_growth_pct'] <= 0    # flat or going down
+    high_growth = row['mom_growth_pct'] > 0
+    declining = row['mom_growth_pct'] <= 0
 
     if high_revenue and high_growth:
         return 'Star'
@@ -67,9 +71,8 @@ cursor = conn.cursor()
 # adding bcg_category column - if already exists just update it
 try:
     cursor.execute("ALTER TABLE product_kpis ADD COLUMN bcg_category VARCHAR(50)")
-    print("\n✅ Added bcg_category column to MySQL")
 except:
-    print("\n✅ bcg_category column already exists, updating values")
+    pass
 
 # updating every product's BCG category in MySQL
 for _, row in df.iterrows():
@@ -82,10 +85,5 @@ for _, row in df.iterrows():
 conn.commit()
 print(f"✅ BCG categories saved to MySQL for all {len(df)} products")
 
-# showing sample of final results
-print("\n📊 Sample Results:")
-print(df[['product_name', 'total_revenue', 'mom_growth_pct', 'bcg_category']].head(10))
-
 cursor.close()
 conn.close()
-print("\n✅ Done. BCG Matrix complete!")

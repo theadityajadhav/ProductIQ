@@ -1,12 +1,17 @@
-import mysql.connector
 import pandas as pd
+from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
+import mysql.connector
 
-# loading my database credentials from .env file
+# loading my .env file
 load_dotenv()
 
-# connecting to my productiq database using credentials from .env
+# creating SQLAlchemy engine to avoid pandas warning
+db_url = f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
+engine = create_engine(db_url)
+
+# also keeping mysql connector for insert operations
 try:
     conn = mysql.connector.connect(
         host=os.getenv("DB_HOST"),
@@ -19,8 +24,8 @@ except mysql.connector.Error as e:
     print(f"❌ Connection failed: {e}")
     exit()
 
-# pulling all sales data into a dataframe so I can calculate KPIs
-df = pd.read_sql("SELECT * FROM superstore", conn)
+# pulling all sales data using SQLAlchemy engine
+df = pd.read_sql("SELECT * FROM superstore", engine)
 print(f"✅ Loaded {len(df)} rows from MySQL")
 
 # converting order_date to datetime so I can extract year
@@ -41,7 +46,6 @@ product_kpis['profit_margin_pct'] = (
 ).round(2)
 
 # calculating yearly growth - comparing 2017 vs 2016 revenue per product
-# this gives more accurate growth since dataset spans 2014-2017
 rev_2017 = df[df['year'] == 2017].groupby('product_name')['sales'].sum()
 rev_2016 = df[df['year'] == 2016].groupby('product_name')['sales'].sum()
 
@@ -56,15 +60,12 @@ product_kpis = product_kpis.merge(growth, on='product_name', how='left')
 product_kpis['mom_growth_pct'] = product_kpis['mom_growth_pct'].fillna(0)
 
 print(f"✅ KPIs calculated for {len(product_kpis)} products")
-print("\n📊 Sample KPIs:")
-print(product_kpis.head())
 
-# saving KPI results back to MySQL as a new table
+# saving KPI results back to MySQL
 cursor = conn.cursor()
 
 # dropping table if exists so we start fresh every time
 cursor.execute("DROP TABLE IF EXISTS product_kpis")
-
 cursor.execute("""
     CREATE TABLE product_kpis (
         product_name VARCHAR(255),
@@ -84,8 +85,7 @@ for _, row in product_kpis.iterrows():
     """, tuple(row))
 
 conn.commit()
-print(f"\n✅ Saved {len(product_kpis)} products to product_kpis table in MySQL")
+print(f"✅ Saved {len(product_kpis)} products to product_kpis table in MySQL")
 
 cursor.close()
 conn.close()
-print("✅ Done. Connection closed.")

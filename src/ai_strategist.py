@@ -1,14 +1,19 @@
 import mysql.connector
 from google import genai
 import pandas as pd
+from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
 import time
 
-# loading all credentials from .env file
+# loading my .env file
 load_dotenv()
 
-# connecting to my productiq database
+# creating SQLAlchemy engine to avoid pandas warning
+db_url = f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
+engine = create_engine(db_url)
+
+# also keeping mysql connector for insert operations
 try:
     conn = mysql.connector.connect(
         host=os.getenv("DB_HOST"),
@@ -21,12 +26,12 @@ except mysql.connector.Error as e:
     print(f"❌ Connection failed: {e}")
     exit()
 
-# setting up Gemini AI with my API key using new google-genai SDK
+# setting up Gemini AI with my API key
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 print("✅ Gemini AI ready!")
 
-# pulling BCG results from MySQL
-df = pd.read_sql("SELECT * FROM product_kpis", conn)
+# pulling BCG results from MySQL using SQLAlchemy
+df = pd.read_sql("SELECT * FROM product_kpis", engine)
 print(f"✅ Loaded {len(df)} products from MySQL")
 
 # grouping products by BCG category to send each group to Gemini
