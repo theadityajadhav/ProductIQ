@@ -56,6 +56,16 @@ h1 {
     border: none !important;
 }
  
+/* Force dark text on white background */
+.stApp, .stApp p, .stApp h1, .stApp h2, .stApp h3,
+.stApp label, .stApp .stMarkdown, .stApp div {
+    color: #1a1a1a !important;
+}
+
+/* Fix metric cards */
+[data-testid="stMetricValue"] { color: #1B4FD8 !important; }
+[data-testid="stMetricLabel"] { color: #444444 !important; }
+
 /* Table header blue (best-effort) */
 [data-testid="stDataFrame"] th {
     background-color: #1B4FD8 !important;
