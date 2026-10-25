@@ -385,6 +385,8 @@ if uploaded_file is not None:
 
         load_dotenv()
         api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            api_key = st.secrets.get("GEMINI_API_KEY", None)
 
         st.markdown("---")
         st.markdown("### 🤖 AI Strategy Recommendations")
