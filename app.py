@@ -307,7 +307,7 @@ if uploaded_file is not None:
                 title_font_color="#1B4FD8",
                 height=450,
                 yaxis=dict(range=[-100, 500]),
-                xaxis=dict(range=[0, kpis["total_revenue"].max()])
+                xaxis=dict(range=[0, kpis["total_revenue"].max() * 1.05])
             )
             with st.container(border=True):
                 st.plotly_chart(fig_scatter, use_container_width=True)
