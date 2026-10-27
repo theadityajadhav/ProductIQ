@@ -3,3 +3,5 @@
 data/Sample - Superstore.csv
 data/superstore_clean.csv
 .env
+__pycache__/
+productiq-env/
