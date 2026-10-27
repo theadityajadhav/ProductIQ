@@ -176,6 +176,7 @@ if uploaded_file is not None:
         # ── Growth calculation (latest 2 years only) ──────────────────────────
         years = []
         y1, y2 = None, None
+        growth_unavailable = False  # Flag: True when growth data cannot be calculated
  
         if "date" in col_map:
             df[col_map["date"]] = pd.to_datetime(df[col_map["date"]], errors="coerce")
@@ -188,9 +189,13 @@ if uploaded_file is not None:
                 growth = ((rev_y2 - rev_y1) / rev_y1.replace(0, 1) * 100).round(2)
                 kpis["growth_pct"] = kpis[prod_col].map(growth).fillna(0).round(2)
             else:
+                # Only one year of data found
                 kpis["growth_pct"] = 0.0
+                growth_unavailable = True
         else:
+            # No date column in dataset
             kpis["growth_pct"] = 0.0
+            growth_unavailable = True
  
         # ── KPI cards ─────────────────────────────────────────────────────────
         st.markdown("---")
@@ -211,8 +216,11 @@ if uploaded_file is not None:
         growth_median  = kpis["growth_pct"].median()
  
         def assign_bcg(row):
-            high_rev    = row["total_revenue"] >= revenue_median
-            high_growth = row["growth_pct"]    >= growth_median
+            high_rev = row["total_revenue"] >= revenue_median
+            if growth_unavailable:
+                # No growth data — classify by revenue only
+                return "Star" if high_rev else "Cash Cow"
+            high_growth = row["growth_pct"] >= growth_median
             if high_rev and high_growth:
                 return "Star"
             elif high_rev and not high_growth:
@@ -228,6 +236,10 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("### BCG Matrix Summary")
  
+        # Show warning if growth data was unavailable
+        if growth_unavailable:
+            st.warning("⚠️ Growth data unavailable — classifying by revenue only.")
+ 
         bcg_summary = kpis.groupby("bcg_category").agg(
             Products    =("bcg_category",     "count"),
             Avg_Revenue =("total_revenue",     "mean"),
@@ -237,7 +249,7 @@ if uploaded_file is not None:
         bcg_summary.columns = ["BCG Category", "Products", "Avg Revenue ($)", "Avg Margin (%)", "Avg Growth (%)"]
         for c in ["Avg Revenue ($)", "Avg Margin (%)", "Avg Growth (%)"]:
             bcg_summary[c] = bcg_summary[c].round(2)
-
+ 
         with st.container(border=True):
             st.dataframe(
                 bcg_summary,
@@ -282,7 +294,7 @@ if uploaded_file is not None:
                 title_font_color="#1B4FD8",
                 height=450
             )
-            
+ 
             with st.container(border=True):
                 st.plotly_chart(fig_bar, use_container_width=True)
  
@@ -315,16 +327,17 @@ if uploaded_file is not None:
         st.success("✅ BCG analysis complete!")
  
         # ── Save to session_state so filter dropdown doesn't reset results ────
-        st.session_state["kpis"]        = kpis
-        st.session_state["prod_col"]    = prod_col
-        st.session_state["bcg_summary"] = bcg_summary
-        st.session_state["analyzed"]    = True
+        st.session_state["kpis"]             = kpis
+        st.session_state["prod_col"]         = prod_col
+        st.session_state["bcg_summary"]      = bcg_summary
+        st.session_state["analyzed"]         = True
+        st.session_state["growth_unavailable"] = growth_unavailable
  
     # ── Part 5: Product Table + Filter + CSV Download ─────────────────────────
     if st.session_state.get("analyzed") and st.session_state.get("kpis") is not None:
-        kpis        = st.session_state["kpis"]
-        prod_col    = st.session_state["prod_col"]
-        bcg_summary = st.session_state["bcg_summary"]
+        kpis             = st.session_state["kpis"]
+        prod_col         = st.session_state["prod_col"]
+        bcg_summary      = st.session_state["bcg_summary"]
  
         st.markdown("---")
         st.markdown("### Product Details")
@@ -380,22 +393,22 @@ if uploaded_file is not None:
         import google.generativeai as genai
         import os
         from dotenv import load_dotenv
-
+ 
         load_dotenv()
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             api_key = st.secrets.get("GEMINI_API_KEY", None)
-
+ 
         st.markdown("---")
         st.markdown("### 🤖 AI Strategy Recommendations")
-
+ 
         if not api_key:
             st.error("GEMINI_API_KEY not found in .env file.")
         else:
             if st.button("✨ Generate AI Recommendations", type="primary"):
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel("gemini-3.6-flash")
-
+ 
                 summary_text = ""
                 for _, row in bcg_summary.iterrows():
                     summary_text += (
@@ -404,38 +417,38 @@ if uploaded_file is not None:
                         f"Avg Margin {row['Avg Margin (%)']:.2f}%, "
                         f"Avg Growth {row['Avg Growth (%)']:.2f}%\n"
                     )
-
+ 
                 prompt = f"""
 You are a McKinsey strategy consultant. Analyze this BCG portfolio:
-
+ 
 {summary_text}
-
+ 
 Return recommendations in EXACTLY this format, only for categories present above:
-
+ 
 ##STARS##
 2 sentences of strategy for Stars.
-
+ 
 ##CASH COWS##
 2 sentences of strategy for Cash Cows.
-
+ 
 ##HIDDEN GEMS##
 2 sentences of strategy for Hidden Gems.
-
+ 
 ##DEAD WEIGHT##
 2 sentences of strategy for Dead Weight.
-
+ 
 ##OVERALL##
 1 sentence overall portfolio recommendation.
-
+ 
 Only include sections for categories that exist in the data. Be direct and specific.
 """
                 with st.spinner("Generating AI recommendations..."):
                     response = model.generate_content(prompt)
                     st.session_state["ai_response"] = response.text
-
+ 
             if st.session_state.get("ai_response"):
                 raw = st.session_state["ai_response"]
-
+ 
                 # Category config — emoji, color, display name
                 category_config = {
                     "STARS":       ("⭐", "#1B4FD8", "Stars"),
@@ -444,18 +457,18 @@ Only include sections for categories that exist in the data. Be direct and speci
                     "DEAD WEIGHT": ("⚖️", "#EF4444", "Dead Weight"),
                     "OVERALL":     ("🎯", "#1B4FD8", "Overall Portfolio Strategy"),
                 }
-
+ 
                 # Parse sections from response
                 import re
                 sections = re.split(r"##([A-Z ]+)##", raw)
                 # sections = ['', 'STARS', 'text...', 'CASH COWS', 'text...', ...]
-
+ 
                 parsed = {}
                 for i in range(1, len(sections) - 1, 2):
                     key = sections[i].strip()
                     text = sections[i + 1].strip()
                     parsed[key] = text
-
+ 
                 # Display each section as a colored card
                 for key, (emoji, color, label) in category_config.items():
                     if key in parsed:
@@ -471,7 +484,7 @@ Only include sections for categories that exist in the data. Be direct and speci
 <span style="color:#1a1a1a;">{parsed[key]}</span>
 </div>
 """, unsafe_allow_html=True)
-
-                st.success("✅ AI recommendations generated!")
-                
  
+                st.success("✅ AI recommendations generated!")
+ 
+
