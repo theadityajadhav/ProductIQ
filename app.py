@@ -136,14 +136,14 @@ if uploaded_file is not None:
  
     if analyze:
         # ── Column detection ──────────────────────────────────────────────────
-        df.columns = [c.lower().strip() for c in df.columns]
+        df.columns = [c.lower().strip().replace("_", " ") for c in df.columns]
         col_map = {}
  
-        # Detect product ID first (prefer "product id" over generic "product")
+        # Detect product name first, so each product is counted once by name
         for c in df.columns:
-            if "product id" in c and "product" not in col_map:
+            if "product name" in c and "product" not in col_map:
                 col_map["product"] = c
-        # Fallback: if no product id column, use product / item
+        # Fallback: if there is no product name column, use product id / item
         if "product" not in col_map:
             for c in df.columns:
                 if any(x in c for x in ["product", "item name", "item"]) and "product" not in col_map:
