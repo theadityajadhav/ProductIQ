@@ -138,9 +138,18 @@ if uploaded_file is not None:
         # ── Column detection ──────────────────────────────────────────────────
         df.columns = [c.lower().strip() for c in df.columns]
         col_map = {}
+ 
+        # Detect product ID first (prefer "product id" over generic "product")
         for c in df.columns:
-            if any(x in c for x in ["product name", "product", "item name", "item"]) and "product" not in col_map:
+            if "product id" in c and "product" not in col_map:
                 col_map["product"] = c
+        # Fallback: if no product id column, use product / item
+        if "product" not in col_map:
+            for c in df.columns:
+                if any(x in c for x in ["product", "item name", "item"]) and "product" not in col_map:
+                    col_map["product"] = c
+ 
+        for c in df.columns:
             if any(x in c for x in ["sales", "revenue", "amount"]) and "sales" not in col_map:
                 col_map["sales"] = c
             if "profit" in c and "profit" not in col_map:
@@ -148,7 +157,7 @@ if uploaded_file is not None:
             if any(x in c for x in ["order date", "date"]) and "date" not in col_map:
                 col_map["date"] = c
  
-        # Also detect a separate product name column (e.g. Superstore has both product id and product name)
+        # Detect separate product name column (e.g. Superstore has both product id and product name)
         name_col = None
         for c in df.columns:
             if "product name" in c and c != col_map.get("product"):
@@ -242,11 +251,11 @@ if uploaded_file is not None:
         growth_median = valid_growth.median() if len(valid_growth) > 0 else None
  
         def assign_bcg(row):
-            high_rev = row["total_revenue"] >= revenue_median
+            # Products with no growth data get their own category — NOT Star/Cash Cow
             if growth_unavailable or pd.isna(row["growth_pct"]):
-                # No growth data — classify by revenue only
-                return "Star" if high_rev else "Cash Cow"
-            # Use strict > so products exactly at median don't all skew one side
+                return "Insufficient Data"
+            high_rev    = row["total_revenue"] >= revenue_median
+            # Use strict > so products exactly at median don't all tip one side
             high_growth = row["growth_pct"] > growth_median
             if high_rev and high_growth:
                 return "Star"
@@ -266,14 +275,18 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("### BCG-Inspired Portfolio Summary")
  
-        # Show warning if growth data was unavailable for some/all products
-        insufficient_count = kpis["growth_pct"].isna().sum()
-        if growth_unavailable:
-            st.warning("⚠️ Growth data unavailable — classifying by revenue only.")
-        elif insufficient_count > 0:
-            st.info(f"ℹ️ {insufficient_count} products appeared in only one year — classified by revenue only (insufficient growth data).")
+        # Separate the 4 real BCG categories from the insufficient-data group
+        bcg_four   = kpis[kpis["bcg_category"] != "Insufficient Data"]
+        insuf_data = kpis[kpis["bcg_category"] == "Insufficient Data"]
+        insufficient_count = len(insuf_data)
  
-        bcg_summary = kpis.groupby("bcg_category").agg(
+        if growth_unavailable:
+            st.warning("⚠️ No date column found — growth data unavailable. All products shown with Insufficient Data label.")
+        elif insufficient_count > 0:
+            st.info(f"ℹ️ {insufficient_count} products appeared in only one year and have been placed in a separate 'Insufficient Data' group. They are excluded from the BCG summary and AI recommendations.")
+ 
+        # Summary table covers only the 4 BCG categories
+        bcg_summary = bcg_four.groupby("bcg_category").agg(
             Products    =("bcg_category",     "count"),
             Avg_Revenue =("total_revenue",     "mean"),
             Avg_Margin  =("profit_margin_pct", "mean"),
@@ -311,7 +324,8 @@ if uploaded_file is not None:
         chart_col1, chart_col2 = st.columns(2)
  
         with chart_col1:
-            bar_data = kpis.groupby("bcg_category")["total_revenue"].sum().reset_index()
+            # Charts use only the 4 BCG categories (exclude Insufficient Data)
+            bar_data = bcg_four.groupby("bcg_category")["total_revenue"].sum().reset_index()
             bar_data.columns = ["BCG Category", "Total Revenue"]
             fig_bar = px.bar(
                 bar_data,
@@ -332,7 +346,7 @@ if uploaded_file is not None:
                 st.plotly_chart(fig_bar, use_container_width=True)
  
         with chart_col2:
-            scatter_data = kpis.dropna(subset=["growth_pct"]).copy()
+            scatter_data = bcg_four.dropna(subset=["growth_pct"]).copy()
             hover_col = "product_name" if "product_name" in kpis.columns else prod_col
             fig_scatter = px.scatter(
                 scatter_data,
@@ -364,6 +378,8 @@ if uploaded_file is not None:
  
         # ── Save to session_state so filter dropdown doesn't reset results ────
         st.session_state["kpis"]               = kpis
+        st.session_state["bcg_four"]           = bcg_four
+        st.session_state["insufficient_count"] = insufficient_count
         st.session_state["prod_col"]           = prod_col
         st.session_state["name_col"]           = name_col
         st.session_state["bcg_summary"]        = bcg_summary
@@ -372,77 +388,106 @@ if uploaded_file is not None:
  
     # ── Part 5: Product Table + Filter + CSV Download ─────────────────────────
     if st.session_state.get("analyzed") and st.session_state.get("kpis") is not None:
-        kpis             = st.session_state["kpis"]
-        prod_col         = st.session_state["prod_col"]
-        name_col         = st.session_state.get("name_col")
-        bcg_summary      = st.session_state["bcg_summary"]
+        kpis               = st.session_state["kpis"]
+        bcg_four           = st.session_state["bcg_four"]
+        insufficient_count = st.session_state.get("insufficient_count", 0)
+        prod_col           = st.session_state["prod_col"]
+        name_col           = st.session_state.get("name_col")
+        bcg_summary        = st.session_state["bcg_summary"]
  
         st.markdown("---")
         st.markdown("### Product Details")
  
-        categories = ["All"] + sorted(kpis["bcg_category"].unique().tolist())
+        # Helper: build a clean display dataframe from a subset of kpis
+        def build_display(subset):
+            subset = subset.copy()
+ 
+            # Loss-making flag in category label
+            def bcg_label(row):
+                label = row["bcg_category"]
+                if row["loss_making"] and label != "Insufficient Data":
+                    label += " ⚠️"
+                return label
+            subset["bcg_display"] = subset.apply(bcg_label, axis=1)
+ 
+            # Format growth: N/A for missing, else "12.34%"
+            subset["growth_fmt"] = subset["growth_pct"].apply(
+                lambda x: "N/A" if pd.isna(x) else f"{x:.2f}%"
+            )
+            # Format margin
+            subset["margin_fmt"] = subset["profit_margin_pct"].apply(
+                lambda x: f"{x:.2f}%"
+            )
+            # Fix money format: -$117.88 not $-117.88
+            subset["rev_fmt"] = subset["total_revenue"].apply(
+                lambda x: f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
+            )
+            subset["profit_fmt"] = subset["total_profit"].apply(
+                lambda x: f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
+            )
+ 
+            rename_map = {
+                "rev_fmt":    "Total Revenue",
+                "profit_fmt": "Total Profit",
+                "margin_fmt": "Margin %",
+                "growth_fmt": "Growth %",
+                "bcg_display": "BCG Category",
+            }
+ 
+            if name_col and "product_name" in subset.columns:
+                rename_map["product_name"] = "Product Name"
+                rename_map[prod_col]       = "Product ID"
+                display_cols = ["Product Name", "Product ID", "BCG Category",
+                                "Total Revenue", "Total Profit", "Margin %", "Growth %"]
+            else:
+                rename_map[prod_col] = "Product"
+                display_cols = ["Product", "BCG Category",
+                                "Total Revenue", "Total Profit", "Margin %", "Growth %"]
+ 
+            df_out = subset.rename(columns=rename_map)
+            return df_out[[c for c in display_cols if c in df_out.columns]]
+ 
+        # ── Filter for the 4 BCG categories ──────────────────────────────────
+        categories = ["All"] + sorted(bcg_four["bcg_category"].unique().tolist())
         selected_cat = st.selectbox("🔍 Filter by BCG Category", categories)
  
         if selected_cat == "All":
-            filtered = kpis.copy()
+            filtered = bcg_four.copy()
         else:
-            filtered = kpis[kpis["bcg_category"] == selected_cat].copy()
+            filtered = bcg_four[bcg_four["bcg_category"] == selected_cat].copy()
  
-        # Add loss-making flag to display
-        def bcg_label(row):
-            label = row["bcg_category"]
-            if row["loss_making"]:
-                label += " ⚠️"
-            return label
- 
-        filtered = filtered.copy()
-        filtered["bcg_display"] = filtered.apply(bcg_label, axis=1)
- 
-        # Build display columns — show product name if available, keep ID as second col
-        rename_map = {
-            "total_revenue":     "Total Revenue ($)",
-            "total_profit":      "Total Profit ($)",
-            "profit_margin_pct": "Margin (%)",
-            "growth_pct":        "Growth (%)",
-            "bcg_display":       "BCG Category",
-        }
- 
-        if name_col and "product_name" in filtered.columns:
-            rename_map["product_name"] = "Product Name"
-            rename_map[prod_col]       = "Product ID"
-            display_cols = ["Product Name", "Product ID", "BCG Category",
-                            "Total Revenue ($)", "Total Profit ($)", "Margin (%)", "Growth (%)"]
-        else:
-            rename_map[prod_col] = "Product"
-            display_cols = ["Product", "BCG Category",
-                            "Total Revenue ($)", "Total Profit ($)", "Margin (%)", "Growth (%)"]
- 
-        display_df = filtered.rename(columns=rename_map)
-        display_df = display_df[[c for c in display_cols if c in display_df.columns]]
- 
-        # Fix money format: negative profit should be -$117.88, not $-117.88
-        for col in ["Total Revenue ($)", "Total Profit ($)"]:
-            if col in display_df.columns:
-                display_df[col] = display_df[col].apply(
-                    lambda x: f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
-                )
+        display_df = build_display(filtered)
  
         with st.container(border=True):
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True,
-            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
  
-        st.caption(f"Showing {len(display_df)} of {len(kpis)} products  |  ⚠️ = loss-making product (negative margin)")
+        st.caption(
+            f"Showing {len(display_df)} of {len(bcg_four)} classified products  |  "
+            f"⚠️ = loss-making (negative margin)"
+        )
  
         csv_data = display_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="⬇️ Download Results as CSV",
+            label="⬇️ Download BCG Results as CSV",
             data=csv_data,
             file_name="productiq_bcg_results.csv",
             mime="text/csv"
         )
+ 
+        # ── Insufficient Data group shown separately ───────────────────────
+        if insufficient_count > 0:
+            insuf_df = kpis[kpis["bcg_category"] == "Insufficient Data"].copy()
+            with st.expander(f"📋 {insufficient_count} products with Insufficient Data (appeared in only one year)"):
+                insuf_display = build_display(insuf_df)
+                st.dataframe(insuf_display, use_container_width=True, hide_index=True)
+                insuf_csv = insuf_display.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="⬇️ Download Insufficient Data list",
+                    data=insuf_csv,
+                    file_name="productiq_insufficient_data.csv",
+                    mime="text/csv",
+                    key="insuf_csv"
+                )
  
         st.success("✅ Analysis complete! Download your results above.")
  
