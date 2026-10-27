@@ -14,6 +14,16 @@ Upload any sales dataset and get instant insights in seconds.
 
 ---
 
+## Screenshots
+
+![Upload & File Stats](screenshots/screenshot1.png)
+![KPI Cards & BCG Summary](screenshots/screenshot2.png)
+![Visual Analysis Charts](screenshots/screenshot3.png)
+![Product Details Table](screenshots/screenshot4.png)
+![AI Strategy Recommendations](screenshots/screenshot5.png)
+
+---
+
 ## Features
 
 - 📊 **BCG Matrix Classification** - Auto-classifies products as Star, Cash Cow, Hidden Gem, or Dead Weight
